@@ -35,11 +35,13 @@ if uploaded_files:
     class_counts = {}
     total_objects_found = 0
     
-    # NEW: Dictionaries to keep track of bad/weird data
     anomalies = {
         'empty': [],
         'overlapping': []
     }
+    
+    # NEW: We will store the data here so we can sort it later
+    ui_preview_data = []
     
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         
@@ -62,46 +64,39 @@ if uploaded_files:
             if len(boxes) == 0:
                 anomalies['empty'].append(uploaded_file.name)
             
-            # 2. Check for Overlapping Boxes (Duplicate Detections)
+            # 2. Check for Overlapping Boxes
             has_overlap = False
             for i in range(len(boxes)):
                 for j in range(i + 1, len(boxes)):
-                    # Get corner coordinates of the boxes
                     b1 = boxes[i].xyxyn[0] 
                     b2 = boxes[j].xyxyn[0]
                     
-                    # Calculate Intersection area
                     inter_x1 = max(b1[0], b2[0])
                     inter_y1 = max(b1[1], b2[1])
                     inter_x2 = min(b1[2], b2[2])
                     inter_y2 = min(b1[3], b2[3])
                     
                     inter_area = max(0, float(inter_x2 - inter_x1)) * max(0, float(inter_y2 - inter_y1))
-                    
-                    # Calculate areas of individual boxes
                     box1_area = float((b1[2] - b1[0]) * (b1[3] - b1[1]))
                     box2_area = float((b2[2] - b2[0]) * (b2[3] - b2[1]))
-                    
-                    # Calculate Union area
                     union_area = box1_area + box2_area - inter_area
-                    
-                    # Calculate IoU (Intersection over Union)
                     iou = inter_area / union_area if union_area > 0 else 0
                     
-                    # If boxes overlap by more than 85%, flag it!
                     if iou > 0.85:
                         has_overlap = True
-                        break # Stop checking this image, it's already flagged
+                        break 
                 if has_overlap:
                     break
             
             if has_overlap:
                 anomalies['overlapping'].append(uploaded_file.name)
 
-            # Track statistics and generate text file
+            # NEW: Calculate Average Confidence for this specific image
+            total_conf = 0
             for box in boxes:
                 class_id = int(box.cls[0])
                 class_name = model.names[class_id] 
+                total_conf += float(box.conf[0]) # Add the confidence score
                 
                 if class_name in class_counts:
                     class_counts[class_name] += 1
@@ -113,21 +108,22 @@ if uploaded_files:
                 x_center, y_center, width, height = box.xywhn[0]
                 txt_content += f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n"
             
+            # Math to get the average confidence
+            avg_conf = (total_conf / len(boxes)) if len(boxes) > 0 else 0.0
+            
             zip_file.writestr(f"{base_filename}.txt", txt_content)
             
             annotated_frame = results[0].plot()
             output_image = Image.fromarray(annotated_frame[..., ::-1]) 
             
-            with st.expander(f"🖼️ View Result: {uploaded_file.name}"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.image(output_image, caption=f"AI Labeled preview", use_container_width=True)
-                with col2:
-                    st.write("**Extracted Coordinates (.txt format):**")
-                    if txt_content:
-                        st.code(txt_content, language="text")
-                    else:
-                        st.write("*No objects detected.*")
+            # NEW: Instead of drawing the UI now, save the data to our list
+            ui_preview_data.append({
+                'filename': uploaded_file.name,
+                'image': output_image,
+                'txt_content': txt_content,
+                'avg_conf': avg_conf,
+                'box_count': len(boxes)
+            })
             
             current_progress = (index + 1) / len(uploaded_files)
             progress_bar.progress(current_progress)
@@ -137,7 +133,6 @@ if uploaded_files:
     
     st.markdown("---")
     
-    # Put the Dashboard and the QA Alerts side-by-side using columns
     col_dash, col_qa = st.columns([2, 1])
     
     with col_dash:
@@ -150,28 +145,51 @@ if uploaded_files:
         else:
             st.warning("No objects were detected in this batch.")
             
-    # ---------------------------------------------------------
-    # NEW: THE QA ALERTS SECTION
-    # ---------------------------------------------------------
     with col_qa:
         st.subheader("⚠️ QA Alerts")
         st.write("Auto-flagged issues for human review:")
         
         if anomalies['empty']:
-            st.error(f"**{len(anomalies['empty'])} Empty Images:** \nNo objects found. Might be background noise.")
+            st.error(f"**{len(anomalies['empty'])} Empty Images:** \nNo objects found.")
             with st.expander("View file names"):
-                for name in anomalies['empty']:
-                    st.write(f"- {name}")
+                for name in anomalies['empty']: st.write(f"- {name}")
         else:
             st.success("**0 Empty Images.**")
             
         if anomalies['overlapping']:
-            st.warning(f"**{len(anomalies['overlapping'])} Overlapping Boxes:** \nAI likely drew duplicate boxes on the same object (IoU > 85%).")
+            st.warning(f"**{len(anomalies['overlapping'])} Overlapping Boxes:** \nIoU > 85%.")
             with st.expander("View file names"):
-                for name in anomalies['overlapping']:
-                    st.write(f"- {name}")
+                for name in anomalies['overlapping']: st.write(f"- {name}")
         else:
             st.success("**0 Overlapping Boxes.**")
+
+    st.markdown("---")
+    
+    # ---------------------------------------------------------
+    # NEW: THE SMART REVIEW QUEUE
+    # ---------------------------------------------------------
+    st.subheader("🧠 Smart Review Queue (Active Learning)")
+    st.write("Images are sorted by **Lowest Average Confidence** first. These are the hardest images for the AI. Review these carefully!")
+    
+    # Sort the list so the lowest confidence scores are at the top
+    # We ignore images with 0 boxes (avg_conf == 0) so they don't clog the top
+    ui_preview_data.sort(key=lambda x: x['avg_conf'] if x['box_count'] > 0 else 2.0)
+    
+    # Now draw the UI from the sorted list!
+    for data in ui_preview_data:
+        # We only show the expander title, and put the confidence score right in the title
+        conf_display = f"{data['avg_conf']:.2f}" if data['box_count'] > 0 else "N/A (Empty)"
+        
+        with st.expander(f"🖼️ {data['filename']} | Avg Confidence: {conf_display} | Objects: {data['box_count']}"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(data['image'], caption="AI Labeled preview", use_container_width=True)
+            with col2:
+                st.write("**Extracted Coordinates (.txt format):**")
+                if data['txt_content']:
+                    st.code(data['txt_content'], language="text")
+                else:
+                    st.write("*No objects detected.*")
     # ---------------------------------------------------------
 
     st.markdown("---")
