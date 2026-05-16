@@ -3,7 +3,7 @@ from ultralytics import YOLO
 from PIL import Image
 import io
 import zipfile
-import pandas as pd # NEW: We need pandas to format data for the chart
+import pandas as pd
 
 st.set_page_config(page_title="Smart Pre-Labeling Engine", page_icon="🎯", layout="wide")
 
@@ -32,9 +32,14 @@ if uploaded_files:
     
     zip_buffer = io.BytesIO()
     
-    # NEW: Create a dictionary to count how many times each class is found
     class_counts = {}
     total_objects_found = 0
+    
+    # NEW: Dictionaries to keep track of bad/weird data
+    anomalies = {
+        'empty': [],
+        'overlapping': []
+    }
     
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         
@@ -46,7 +51,6 @@ if uploaded_files:
             results = model(input_image, conf=conf_threshold)
             base_filename = uploaded_file.name.rsplit('.', 1)[0]
             
-            # Save clean image
             img_buffer = io.BytesIO()
             input_image.save(img_buffer, format="JPEG")
             zip_file.writestr(f"{base_filename}.jpg", img_buffer.getvalue())
@@ -54,12 +58,51 @@ if uploaded_files:
             txt_content = ""
             boxes = results[0].boxes
             
-            # NEW: Track the statistics while we generate the text file
+            # 1. Check for Empty Images
+            if len(boxes) == 0:
+                anomalies['empty'].append(uploaded_file.name)
+            
+            # 2. Check for Overlapping Boxes (Duplicate Detections)
+            has_overlap = False
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    # Get corner coordinates of the boxes
+                    b1 = boxes[i].xyxyn[0] 
+                    b2 = boxes[j].xyxyn[0]
+                    
+                    # Calculate Intersection area
+                    inter_x1 = max(b1[0], b2[0])
+                    inter_y1 = max(b1[1], b2[1])
+                    inter_x2 = min(b1[2], b2[2])
+                    inter_y2 = min(b1[3], b2[3])
+                    
+                    inter_area = max(0, float(inter_x2 - inter_x1)) * max(0, float(inter_y2 - inter_y1))
+                    
+                    # Calculate areas of individual boxes
+                    box1_area = float((b1[2] - b1[0]) * (b1[3] - b1[1]))
+                    box2_area = float((b2[2] - b2[0]) * (b2[3] - b2[1]))
+                    
+                    # Calculate Union area
+                    union_area = box1_area + box2_area - inter_area
+                    
+                    # Calculate IoU (Intersection over Union)
+                    iou = inter_area / union_area if union_area > 0 else 0
+                    
+                    # If boxes overlap by more than 85%, flag it!
+                    if iou > 0.85:
+                        has_overlap = True
+                        break # Stop checking this image, it's already flagged
+                if has_overlap:
+                    break
+            
+            if has_overlap:
+                anomalies['overlapping'].append(uploaded_file.name)
+
+            # Track statistics and generate text file
             for box in boxes:
                 class_id = int(box.cls[0])
-                class_name = model.names[class_id] # Get the actual text name (e.g., 'car', 'person')
+                class_name = model.names[class_id] 
                 
-                # Add to our counter
                 if class_name in class_counts:
                     class_counts[class_name] += 1
                 else:
@@ -72,7 +115,6 @@ if uploaded_files:
             
             zip_file.writestr(f"{base_filename}.txt", txt_content)
             
-            # Show preview
             annotated_frame = results[0].plot()
             output_image = Image.fromarray(annotated_frame[..., ::-1]) 
             
@@ -93,28 +135,46 @@ if uploaded_files:
             
     st.success("✅ Batch processing complete!")
     
-    # ---------------------------------------------------------
-    # NEW: THE DATASET MRI DASHBOARD
-    # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader("📊 Dataset Health Report")
     
-    if total_objects_found > 0:
-        st.write(f"**Total Objects Detected:** {total_objects_found}")
+    # Put the Dashboard and the QA Alerts side-by-side using columns
+    col_dash, col_qa = st.columns([2, 1])
+    
+    with col_dash:
+        st.subheader("📊 Dataset Health Report")
+        if total_objects_found > 0:
+            st.write(f"**Total Objects Detected:** {total_objects_found}")
+            df = pd.DataFrame(list(class_counts.items()), columns=['Object Class', 'Count'])
+            df = df.set_index('Object Class')
+            st.bar_chart(df)
+        else:
+            st.warning("No objects were detected in this batch.")
+            
+    # ---------------------------------------------------------
+    # NEW: THE QA ALERTS SECTION
+    # ---------------------------------------------------------
+    with col_qa:
+        st.subheader("⚠️ QA Alerts")
+        st.write("Auto-flagged issues for human review:")
         
-        # Convert our dictionary into a Pandas DataFrame so Streamlit can graph it
-        df = pd.DataFrame(list(class_counts.items()), columns=['Object Class', 'Count'])
-        df = df.set_index('Object Class')
-        
-        # Draw a beautiful bar chart
-        st.bar_chart(df)
-        
-        # Add a quick "Data Engineer" warning if there is heavy imbalance
-        st.info("💡 **Dataset Ops Tip:** Look at the chart above. If one bar is massive and the others are tiny, your dataset has a **Class Imbalance**. The AI will become biased towards the tall bar. Consider uploading more images of the rarer objects before training.")
-    else:
-        st.warning("No objects were detected in this batch. Try lowering the AI Confidence Threshold.")
+        if anomalies['empty']:
+            st.error(f"**{len(anomalies['empty'])} Empty Images:** \nNo objects found. Might be background noise.")
+            with st.expander("View file names"):
+                for name in anomalies['empty']:
+                    st.write(f"- {name}")
+        else:
+            st.success("**0 Empty Images.**")
+            
+        if anomalies['overlapping']:
+            st.warning(f"**{len(anomalies['overlapping'])} Overlapping Boxes:** \nAI likely drew duplicate boxes on the same object (IoU > 85%).")
+            with st.expander("View file names"):
+                for name in anomalies['overlapping']:
+                    st.write(f"- {name}")
+        else:
+            st.success("**0 Overlapping Boxes.**")
     # ---------------------------------------------------------
 
+    st.markdown("---")
     st.download_button(
         label="📦 Download Pro Dataset (.zip with Clean Images & .txt Data)",
         data=zip_buffer.getvalue(),
