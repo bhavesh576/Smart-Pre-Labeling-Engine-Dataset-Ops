@@ -62,7 +62,11 @@ if uploaded_files:
             # --- NEW: OPENCV IMAGE MATHEMATICS ---
             # Convert PIL Image to OpenCV format (Numpy Array) for fast math
             img_cv = np.array(input_image)
-            gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+            
+            # ⚡ SPEED FIX: Shrink the image to 640x640 just for the OpenCV math!
+            img_cv_fast = cv2.resize(img_cv, (640, 640))
+            
+            gray = cv2.cvtColor(img_cv_fast, cv2.COLOR_RGB2GRAY)
             
             # 1. Check Brightness
             brightness = np.mean(gray)
