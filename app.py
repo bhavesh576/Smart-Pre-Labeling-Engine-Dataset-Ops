@@ -4,6 +4,8 @@ from PIL import Image
 import io
 import zipfile
 import pandas as pd
+import cv2
+import numpy as np
 
 st.set_page_config(page_title="Smart Pre-Labeling Engine", page_icon="🎯", layout="wide")
 
@@ -40,7 +42,14 @@ if uploaded_files:
         'overlapping': []
     }
     
-    # NEW: We will store the data here so we can sort it later
+    # NEW: Tracking our Dataset Blind Spots (Scenarios)
+    scenarios = {
+        'low_light': 0,
+        'blurry': 0,
+        'crowded': 0,
+        'small_objects_only': 0
+    }
+    
     ui_preview_data = []
     
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
@@ -49,6 +58,22 @@ if uploaded_files:
             input_image = Image.open(uploaded_file)
             if input_image.mode != 'RGB':
                 input_image = input_image.convert('RGB')
+                
+            # --- NEW: OPENCV IMAGE MATHEMATICS ---
+            # Convert PIL Image to OpenCV format (Numpy Array) for fast math
+            img_cv = np.array(input_image)
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+            
+            # 1. Check Brightness
+            brightness = np.mean(gray)
+            if brightness < 80:
+                scenarios['low_light'] += 1
+                
+            # 2. Check Blurriness (Variance of Laplacian)
+            blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+            if blur_score < 100:  # 100 is a standard threshold for blurry images
+                scenarios['blurry'] += 1
+            # -------------------------------------
                 
             results = model(input_image, conf=conf_threshold)
             base_filename = uploaded_file.name.rsplit('.', 1)[0]
@@ -60,13 +85,22 @@ if uploaded_files:
             txt_content = ""
             boxes = results[0].boxes
             
-            # 1. Check for Empty Images
+            # 3. Check for Crowded Scenes
+            if len(boxes) > 15:
+                scenarios['crowded'] += 1
+            
             if len(boxes) == 0:
                 anomalies['empty'].append(uploaded_file.name)
             
-            # 2. Check for Overlapping Boxes
             has_overlap = False
+            max_box_area_ratio = 0.0 # To track object sizes
+            
             for i in range(len(boxes)):
+                b_current = boxes[i].xywhn[0]
+                box_area_ratio = float(b_current[2] * b_current[3])
+                if box_area_ratio > max_box_area_ratio:
+                    max_box_area_ratio = box_area_ratio
+                
                 for j in range(i + 1, len(boxes)):
                     b1 = boxes[i].xyxyn[0] 
                     b2 = boxes[j].xyxyn[0]
@@ -90,13 +124,17 @@ if uploaded_files:
             
             if has_overlap:
                 anomalies['overlapping'].append(uploaded_file.name)
+                
+            # 4. Check for Small Objects Only
+            # If the biggest box takes up less than 5% of the image, everything is far away
+            if len(boxes) > 0 and max_box_area_ratio < 0.05:
+                scenarios['small_objects_only'] += 1
 
-            # NEW: Calculate Average Confidence for this specific image
             total_conf = 0
             for box in boxes:
                 class_id = int(box.cls[0])
                 class_name = model.names[class_id] 
-                total_conf += float(box.conf[0]) # Add the confidence score
+                total_conf += float(box.conf[0])
                 
                 if class_name in class_counts:
                     class_counts[class_name] += 1
@@ -108,7 +146,6 @@ if uploaded_files:
                 x_center, y_center, width, height = box.xywhn[0]
                 txt_content += f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n"
             
-            # Math to get the average confidence
             avg_conf = (total_conf / len(boxes)) if len(boxes) > 0 else 0.0
             
             zip_file.writestr(f"{base_filename}.txt", txt_content)
@@ -116,7 +153,6 @@ if uploaded_files:
             annotated_frame = results[0].plot()
             output_image = Image.fromarray(annotated_frame[..., ::-1]) 
             
-            # NEW: Instead of drawing the UI now, save the data to our list
             ui_preview_data.append({
                 'filename': uploaded_file.name,
                 'image': output_image,
@@ -130,15 +166,35 @@ if uploaded_files:
             progress_text.text(f"Processed {index + 1} of {len(uploaded_files)}")
             
     st.success("✅ Batch processing complete!")
+    st.markdown("---")
+    
+    # --- NEW: DATASET BLIND SPOT FINDER DASHBOARD ---
+    st.subheader("🕵️ Dataset Blind Spot Finder")
+    st.write("Auditing your dataset for real-world scenarios to prevent model failure.")
+    
+    total_imgs = len(uploaded_files)
+    
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    
+    with col_s1:
+        st.metric(label="Night / Low Light", value=f"{scenarios['low_light']} imgs", delta=f"{round((scenarios['low_light']/total_imgs)*100, 1)}%", delta_color="off")
+    with col_s2:
+        st.metric(label="Blurry / Out of Focus", value=f"{scenarios['blurry']} imgs", delta=f"{round((scenarios['blurry']/total_imgs)*100, 1)}%", delta_color="off")
+    with col_s3:
+        st.metric(label="Crowded (>15 objects)", value=f"{scenarios['crowded']} imgs", delta=f"{round((scenarios['crowded']/total_imgs)*100, 1)}%", delta_color="off")
+    with col_s4:
+        st.metric(label="Distant / Small Objects", value=f"{scenarios['small_objects_only']} imgs", delta=f"{round((scenarios['small_objects_only']/total_imgs)*100, 1)}%", delta_color="off")
+    
+    st.info("💡 **Coverage Analysis:** If any of the percentages above are below **10%**, your model will likely fail in that real-world scenario due to lack of training data. Go source more images for those specific conditions!")
     
     st.markdown("---")
+    # ------------------------------------------------
     
     col_dash, col_qa = st.columns([2, 1])
     
     with col_dash:
-        st.subheader("📊 Dataset Health Report")
+        st.subheader("📊 Class Distribution")
         if total_objects_found > 0:
-            st.write(f"**Total Objects Detected:** {total_objects_found}")
             df = pd.DataFrame(list(class_counts.items()), columns=['Object Class', 'Count'])
             df = df.set_index('Object Class')
             st.bar_chart(df)
@@ -147,50 +203,34 @@ if uploaded_files:
             
     with col_qa:
         st.subheader("⚠️ QA Alerts")
-        st.write("Auto-flagged issues for human review:")
-        
         if anomalies['empty']:
-            st.error(f"**{len(anomalies['empty'])} Empty Images:** \nNo objects found.")
-            with st.expander("View file names"):
-                for name in anomalies['empty']: st.write(f"- {name}")
+            st.error(f"**{len(anomalies['empty'])} Empty Images**")
         else:
             st.success("**0 Empty Images.**")
             
         if anomalies['overlapping']:
-            st.warning(f"**{len(anomalies['overlapping'])} Overlapping Boxes:** \nIoU > 85%.")
-            with st.expander("View file names"):
-                for name in anomalies['overlapping']: st.write(f"- {name}")
+            st.warning(f"**{len(anomalies['overlapping'])} Overlapping Boxes** (IoU > 85%)")
         else:
             st.success("**0 Overlapping Boxes.**")
 
     st.markdown("---")
     
-    # ---------------------------------------------------------
-    # NEW: THE SMART REVIEW QUEUE
-    # ---------------------------------------------------------
     st.subheader("🧠 Smart Review Queue (Active Learning)")
-    st.write("Images are sorted by **Lowest Average Confidence** first. These are the hardest images for the AI. Review these carefully!")
+    st.write("Images sorted by **Lowest Average Confidence**.")
     
-    # Sort the list so the lowest confidence scores are at the top
-    # We ignore images with 0 boxes (avg_conf == 0) so they don't clog the top
     ui_preview_data.sort(key=lambda x: x['avg_conf'] if x['box_count'] > 0 else 2.0)
     
-    # Now draw the UI from the sorted list!
     for data in ui_preview_data:
-        # We only show the expander title, and put the confidence score right in the title
         conf_display = f"{data['avg_conf']:.2f}" if data['box_count'] > 0 else "N/A (Empty)"
-        
         with st.expander(f"🖼️ {data['filename']} | Avg Confidence: {conf_display} | Objects: {data['box_count']}"):
             col1, col2 = st.columns(2)
             with col1:
                 st.image(data['image'], caption="AI Labeled preview", use_container_width=True)
             with col2:
-                st.write("**Extracted Coordinates (.txt format):**")
                 if data['txt_content']:
                     st.code(data['txt_content'], language="text")
                 else:
                     st.write("*No objects detected.*")
-    # ---------------------------------------------------------
 
     st.markdown("---")
     st.download_button(
