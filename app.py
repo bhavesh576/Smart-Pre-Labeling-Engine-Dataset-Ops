@@ -180,7 +180,38 @@ if uploaded_files:
     with col_s4:
         st.metric(label="Distant / Small Objects", value=f"{scenarios['small_objects_only']} imgs", delta=f"{round((scenarios['small_objects_only']/total_imgs)*100, 1)}%", delta_color="off")
     
-    st.info("💡 **Coverage Analysis:** If any of the percentages above are below **10%**, your model will likely fail in that real-world scenario due to lack of training data. Go source more images for those specific conditions!")
+    st.markdown("---")
+    
+    # --- NEW: FAILURE PREDICTION REPORT ---
+    st.subheader("🚨 'Why Will My Model Fail?' - Predictive Risk Report")
+    st.write("Automated risk assessment based on dataset representation gaps. Models require at least 15% coverage of an edge case to generalize safely.")
+    
+    # We want at least 15% of the dataset to represent a difficult scenario for robustness
+    target_coverage_pct = 15.0 
+    risks_found = False
+    
+    def calculate_and_display_risk(scenario_name, count, total_images):
+        pct = (count / total_images) * 100 if total_images > 0 else 0
+        
+        if pct < target_coverage_pct:
+            # Calculate a harsh failure probability based on how far they are from the 15% target
+            fail_prob = min(99, int(100 - (pct / target_coverage_pct * 100)))
+            missing_imgs = max(10, int((target_coverage_pct / 100 * total_images) - count))
+            
+            st.error(f"**⚠️ {fail_prob}% Failure Probability on: {scenario_name}** \n\n"
+                     f"**Analysis:** Only {count} images ({pct:.1f}%) feature this condition. The model will likely collapse or hallucinate when encountering this in production.\n\n"
+                     f"**Action Required:** Source a minimum of **{missing_imgs} additional images** featuring {scenario_name.lower()} before initiating model training.")
+            return True
+        return False
+        
+    risks_found |= calculate_and_display_risk("Low-Light / Nighttime Environments", scenarios['low_light'], total_imgs)
+    risks_found |= calculate_and_display_risk("Blurry / High-Motion Environments", scenarios['blurry'], total_imgs)
+    risks_found |= calculate_and_display_risk("Highly Cluttered / Crowded Scenes", scenarios['crowded'], total_imgs)
+    risks_found |= calculate_and_display_risk("Distant / Extremely Small Objects", scenarios['small_objects_only'], total_imgs)
+    
+    if not risks_found:
+        st.success("✅ **Dataset Risk Assessment Passed!** Your dataset has excellent coverage across diverse real-world edge cases. Ready for training.")
+    # ------------------------------------------------
     
     st.markdown("---")
     
