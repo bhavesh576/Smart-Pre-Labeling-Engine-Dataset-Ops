@@ -24,8 +24,10 @@ Unlike standard object detection wrappers, this application focuses on **Data-Ce
 * **🚀 Cloud-Optimized Processing:** Implements dynamic image resizing (320x320) before OpenCV mathematical analysis, allowing heavy computer vision pixel math to run at lightning speed on free-tier, CPU-only cloud environments.
 
 ## 📸 Dashboard Preview
+<img width="1365" height="612" alt="fffff" src="https://github.com/user-attachments/assets/bde7044d-7066-4f9c-8331-4dd198536a11" />
+<img width="1366" height="614" alt="ioi" src="https://github.com/user-attachments/assets/2ce14933-2157-492d-a12c-368a990259dc" />
+<img width="1366" height="612" alt="ttt" src="https://github.com/user-attachments/assets/01aca14d-a6f9-4c03-8d07-2fd7e2dc6bfb" />
 
-*(Add your screenshots here! Take screenshots of your Dataset Health Bar Chart, the Blind Spot Finder, your QA Alerts box, and the Smart Review Queue from your live app and drag them into this section.)*
 
 ## 🛠️ Tech Stack
 * **Frontend/UI:** [Streamlit](https://streamlit.io/) (Deployed via Streamlit Community Cloud)
