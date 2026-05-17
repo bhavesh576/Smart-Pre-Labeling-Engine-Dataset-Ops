@@ -42,7 +42,6 @@ if uploaded_files:
         'overlapping': []
     }
     
-    # NEW: Tracking our Dataset Blind Spots (Scenarios)
     scenarios = {
         'low_light': 0,
         'blurry': 0,
@@ -59,27 +58,23 @@ if uploaded_files:
             if input_image.mode != 'RGB':
                 input_image = input_image.convert('RGB')
                 
-            # --- NEW: OPENCV IMAGE MATHEMATICS ---
-            # Convert PIL Image to OpenCV format (Numpy Array) for fast math
             img_cv = np.array(input_image)
             
-            # ⚡ SPEED FIX: Shrink the image to 640x640 just for the OpenCV math!
-            img_cv_fast = cv2.resize(img_cv, (640, 640))
+            # ⚡ EXTREME SPEED FIX 1: Shrink to 320x320 for OpenCV math
+            img_cv_fast = cv2.resize(img_cv, (320, 320))
             
             gray = cv2.cvtColor(img_cv_fast, cv2.COLOR_RGB2GRAY)
             
-            # 1. Check Brightness
             brightness = np.mean(gray)
             if brightness < 80:
                 scenarios['low_light'] += 1
                 
-            # 2. Check Blurriness (Variance of Laplacian)
             blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if blur_score < 100:  # 100 is a standard threshold for blurry images
+            if blur_score < 100:  
                 scenarios['blurry'] += 1
-            # -------------------------------------
                 
-            results = model(input_image, conf=conf_threshold)
+            # ⚡ EXTREME SPEED FIX 2: Force YOLO to run at a smaller size (imgsz=320)
+            results = model(input_image, conf=conf_threshold, imgsz=320)
             base_filename = uploaded_file.name.rsplit('.', 1)[0]
             
             img_buffer = io.BytesIO()
@@ -89,7 +84,6 @@ if uploaded_files:
             txt_content = ""
             boxes = results[0].boxes
             
-            # 3. Check for Crowded Scenes
             if len(boxes) > 15:
                 scenarios['crowded'] += 1
             
@@ -97,7 +91,7 @@ if uploaded_files:
                 anomalies['empty'].append(uploaded_file.name)
             
             has_overlap = False
-            max_box_area_ratio = 0.0 # To track object sizes
+            max_box_area_ratio = 0.0 
             
             for i in range(len(boxes)):
                 b_current = boxes[i].xywhn[0]
@@ -129,8 +123,6 @@ if uploaded_files:
             if has_overlap:
                 anomalies['overlapping'].append(uploaded_file.name)
                 
-            # 4. Check for Small Objects Only
-            # If the biggest box takes up less than 5% of the image, everything is far away
             if len(boxes) > 0 and max_box_area_ratio < 0.05:
                 scenarios['small_objects_only'] += 1
 
@@ -172,7 +164,6 @@ if uploaded_files:
     st.success("✅ Batch processing complete!")
     st.markdown("---")
     
-    # --- NEW: DATASET BLIND SPOT FINDER DASHBOARD ---
     st.subheader("🕵️ Dataset Blind Spot Finder")
     st.write("Auditing your dataset for real-world scenarios to prevent model failure.")
     
@@ -192,7 +183,6 @@ if uploaded_files:
     st.info("💡 **Coverage Analysis:** If any of the percentages above are below **10%**, your model will likely fail in that real-world scenario due to lack of training data. Go source more images for those specific conditions!")
     
     st.markdown("---")
-    # ------------------------------------------------
     
     col_dash, col_qa = st.columns([2, 1])
     
