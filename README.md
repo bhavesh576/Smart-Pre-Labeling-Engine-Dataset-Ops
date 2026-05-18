@@ -1,6 +1,8 @@
 # 🎯 Smart Pre-Labeling Engine & Dataset Ops Platform
 
-[![Live App](https://img.shields.io/badge/Live_App-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit)](https://yolowebgit-ggppnfjm9pavtjflwbvu4m.streamlit.app/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-red?style=for-the-badge&logo=streamlit)](https://yolowebgit-ggppnfjm9pavtjflwbvu4m.streamlit.app/)
+
+**🌐 Access the Live Application Here:** [Ops Platform Streamlit App](https://yolowebgit-ggppnfjm9pavtjflwbvu4m.streamlit.app/)
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-red)
